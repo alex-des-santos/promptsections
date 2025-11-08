@@ -19,6 +19,7 @@ def load_prompt_config(config_path: Path) -> Dict[str, List[str]]:
         "physical_traits",
         "action_clothing_keywords",
         "clothing_keywords",
+        "pose_keywords",
     ]
 
     for key in required_keys:
@@ -140,6 +141,7 @@ CHARACTER_IDENTIFIERS = PROMPT_CONFIG["character_identifiers"]
 PHYSICAL_TRAITS = PROMPT_CONFIG["physical_traits"]
 ACTION_CLOTHING_KEYWORDS = PROMPT_CONFIG["action_clothing_keywords"]
 CLOTHING_KEYWORDS = PROMPT_CONFIG["clothing_keywords"]
+POSE_KEYWORDS = PROMPT_CONFIG["pose_keywords"]
 
 QUALITY_TERMS_LOWER = tuple(term.lower() for term in QUALITY_TERMS)
 BACKGROUND_KEYWORDS_LOWER = tuple(term.lower() for term in BACKGROUND_KEYWORDS)
@@ -149,12 +151,14 @@ ACTION_CLOTHING_KEYWORDS_LOWER = tuple(
     keyword.lower() for keyword in ACTION_CLOTHING_KEYWORDS
 )
 CLOTHING_KEYWORDS_LOWER = tuple(keyword.lower() for keyword in CLOTHING_KEYWORDS)
+POSE_KEYWORDS_LOWER = tuple(keyword.lower() for keyword in POSE_KEYWORDS)
 
 CATEGORY_OPTIONS = [
     "Estilo",
     "Qualidade",
     "Background",
     "Personagem",
+    "Pose",
     "Roupas",
     "Restante do Prompt",
 ]
@@ -205,6 +209,28 @@ def is_clothing_tag(tag: str) -> bool:
     return any(keyword in tag_lower for keyword in CLOTHING_KEYWORDS_LOWER)
 
 
+def is_pose_tag(tag: str) -> bool:
+    """Verifica se o tag descreve pose/enquadramento."""
+    tag_lower = tag.lower()
+    return any(keyword in tag_lower for keyword in POSE_KEYWORDS_LOWER)
+
+
+def normalize_tag(tag: str) -> str:
+    """Remove ênfases simples do tipo (tag:1.2) mantendo apenas a tag."""
+    stripped = tag.strip()
+    if len(stripped) < 5:
+        return stripped
+    if stripped.startswith("(") and stripped.endswith(")"):
+        inner = stripped[1:-1]
+        if ":" in inner and inner.count(":") == 1:
+            candidate, weight = inner.split(":")
+            candidate = candidate.strip()
+            weight = weight.strip()
+            if candidate and weight.replace(".", "", 1).isdigit():
+                return candidate
+    return stripped
+
+
 def parse_prompt(prompt: str) -> tuple[Dict[str, List[str]], List[Dict[str, str]]]:
     """
     Parseia o prompt e separa em categorias.
@@ -217,6 +243,7 @@ def parse_prompt(prompt: str) -> tuple[Dict[str, List[str]], List[Dict[str, str]
     background_detected = False
     character_tags = []
     clothing_tags = []
+    pose_tags = []
     rest_tags = []
     
     classification_details: List[Dict[str, str]] = []
@@ -236,14 +263,15 @@ def parse_prompt(prompt: str) -> tuple[Dict[str, List[str]], List[Dict[str, str]
     custom_rules = CUSTOM_RULES
 
     while i < len(tags):
-        tag = tags[i]
+        tag_raw = tags[i]
+        tag = normalize_tag(tag_raw)
         tag_lower = tag.lower()
         
         # 1. Detectar ESTILO (autor + autor_style)
         is_style, next_i = detect_style(tags, i)
         if is_style:
-            author_tag = tags[i]
-            style_tag = tags[i + 1]
+            author_tag = normalize_tag(tags[i])
+            style_tag = normalize_tag(tags[i + 1])
             style_tags.append(author_tag)
             style_tags.append(style_tag)
             record(author_tag, "Estilo", "Autor detectado em sequência de estilo")
@@ -306,6 +334,14 @@ def parse_prompt(prompt: str) -> tuple[Dict[str, List[str]], List[Dict[str, str]
                 i += 1
                 continue
 
+            # Poses vão para POSE e encerram a seção
+            if is_pose_tag(tag):
+                pose_tags.append(tag)
+                record(tag, "Pose", "Pose detectada")
+                in_character_section = False
+                i += 1
+                continue
+
             # Ações terminam a seção de personagem
             if is_action_or_clothing(tag):
                 in_character_section = False
@@ -335,6 +371,9 @@ def parse_prompt(prompt: str) -> tuple[Dict[str, List[str]], List[Dict[str, str]
             elif normalized_category == "Personagem":
                 character_tags.append(tag)
                 in_character_section = True
+            elif normalized_category == "Pose":
+                pose_tags.append(tag)
+                in_character_section = False
             elif normalized_category == "Roupas":
                 clothing_tags.append(tag)
             else:
@@ -352,6 +391,14 @@ def parse_prompt(prompt: str) -> tuple[Dict[str, List[str]], List[Dict[str, str]
             in_character_section = False
             i += 1
             continue
+
+        # 6.7 Poses fora da seção
+        if is_pose_tag(tag):
+            pose_tags.append(tag)
+            record(tag, "Pose", "Pose detectada")
+            in_character_section = False
+            i += 1
+            continue
         
         # 7. Tudo que não se encaixou vai para RESTANTE
         rest_tags.append(tag)
@@ -363,6 +410,7 @@ def parse_prompt(prompt: str) -> tuple[Dict[str, List[str]], List[Dict[str, str]
         'Qualidade': quality_tags,
         'Background': ['((simple background))'] if background_detected else [],
         'Personagem': character_tags,
+        'Pose': pose_tags,
         'Roupas': clothing_tags,
         'Restante do Prompt': rest_tags
     }
@@ -380,6 +428,7 @@ def format_output(categorized: Dict[str, List[str]]) -> str:
         "Qualidade",
         "Background",
         "Personagem",
+        "Pose",
         "Roupas",
         "Restante do Prompt",
     ]
@@ -476,6 +525,7 @@ def main():
                 'Qualidade': '⭐',
                 'Background': '🖼️',
                 'Personagem': '👤',
+                'Pose': '🧘',
                 'Roupas': '👗',
                 'Restante do Prompt': '📝'
             }
@@ -632,6 +682,50 @@ def main():
                         st.rerun()
             
             if trace:
+                trace_tag_map: Dict[str, str] = {}
+                for item in trace:
+                    trace_tag_map.setdefault(item['tag'], item['categoria'])
+
+                with st.expander("🔄 Reclassificar tags existentes", expanded=False):
+                    st.markdown(
+                        "Escolha qualquer tag já classificada e mova para outra categoria. "
+                        "Isso cria/atualiza uma regra customizada automaticamente."
+                    )
+                    if trace_tag_map:
+                        with st.form("reclassify_form"):
+                            tag_choice = st.selectbox(
+                                "Tag",
+                                options=list(trace_tag_map.keys()),
+                                format_func=lambda value: f"{value} (atual: {trace_tag_map[value]})",
+                                key="reclassify_tag",
+                            )
+                            current_category = trace_tag_map.get(tag_choice, "Restante do Prompt")
+                            default_index = (
+                                CATEGORY_OPTIONS.index(current_category)
+                                if current_category in CATEGORY_OPTIONS
+                                else len(CATEGORY_OPTIONS) - 1
+                            )
+                            new_category = st.selectbox(
+                                "Nova categoria",
+                                CATEGORY_OPTIONS,
+                                index=default_index,
+                                key="reclassify_category",
+                            )
+                            submit_reclass = st.form_submit_button("Reclassificar")
+
+                        if submit_reclass and tag_choice:
+                            set_custom_rule(tag_choice, new_category)
+                            st.success(f"{tag_choice} movido para {new_category}.")
+                            current_prompt = st.session_state.get('prompt_input', '')
+                            if current_prompt:
+                                categorized, trace = parse_prompt(current_prompt)
+                                st.session_state['categorized'] = categorized
+                                st.session_state['classification_trace'] = trace
+                                st.session_state['formatted_output'] = format_output(categorized)
+                            st.rerun()
+                    else:
+                        st.info("Nenhuma tag disponível para reclassificar.")
+
                 st.subheader("🧠 Detalhamento das tags analisadas")
                 render_classification_table(trace)
             

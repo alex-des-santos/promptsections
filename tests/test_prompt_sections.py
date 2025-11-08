@@ -46,3 +46,16 @@ def test_clothing_tag_detected_outside_character_section():
     categorized, _ = app.parse_prompt("thighhighs, boots")
     assert "thighhighs" in categorized["Roupas"]
     assert "boots" in categorized["Roupas"]
+
+
+def test_emphasis_tags_are_normalized():
+    categorized, trace = app.parse_prompt("(bra:1.4), 1girl")
+    assert "bra" in categorized["Restante do Prompt"]
+    assert "1girl" in categorized["Personagem"]
+    assert any(item["tag"] == "bra" for item in trace)
+
+
+def test_pose_tags_are_separated():
+    categorized, _ = app.parse_prompt("looking at viewer, standing, 1girl")
+    assert "looking at viewer" in categorized["Pose"]
+    assert "standing" in categorized["Pose"]
