@@ -639,7 +639,8 @@ def main():
             
             # Saída formatada final
             st.subheader("📋 Prompt Formatado")
-            formatted = st.session_state['formatted_output']
+            formatted = format_output(categorized)
+            st.session_state['formatted_output'] = formatted
             st.text_area(
                 "Copie o prompt reorganizado:",
                 value=formatted,
