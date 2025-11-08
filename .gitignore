@@ -1,0 +1,20 @@
+# Virtual environments
+venv/
+.venv/
+
+# Python caches
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+
+# Streamlit local state
+.streamlit/secrets.toml
+
+# Tooling artifacts
+.mypy_cache/
+.ruff_cache/
+*.log
